@@ -360,9 +360,7 @@ pub(crate) fn hw_type<B: Bmc>(
         {
             return Some(hw::HwType::DgxGb300);
         }
-        // SMC GB300: Supermicro host BMC. The tray scrape shows ServiceRoot vendor "Supermicro"
-        // (Product "GB NVL", no OEM key), so the vendor string carries it -- no chassis helper
-        // needed. See gb300-firmus-ingestion/triangulation-matrix.md.
+        // SMC GB300: Supermicro OpenBMC host.
         if root.vendor() == Some(Vendor::new("Supermicro")) {
             return Some(hw::HwType::SupermicroGb300);
         }
@@ -1016,11 +1014,12 @@ fn machine_setup_status<B: Bmc>(
             }
         }
 
-        hw::HwType::DgxGb300 | hw::HwType::SupermicroGb300 => {
-            // GB300 platforms (DGX on the NVIDIA "GB BMC", SMC on a Supermicro OpenBMC) share
-            // the platform-level setup expectations: secure boot off and boot order by MAC.
-            // TODO(gb300): add per-ODM EXPECTED_BIOS_ATTRS tables once each GB300 tray's
-            // BIOS is characterized; until then no BIOS-attr verification is applied.
+        hw::HwType::DgxGb300 => {
+            // The NVIDIA GB BMC exposes SecureBoot status, and DGX GB300 uses the
+            // same boot-option shape as GB200: match the target network boot option
+            // by MAC in the UEFI device path.
+            // TODO(dgx-gb300): add EXPECTED_BIOS_ATTRS once DGX GB300 BIOS setup is
+            // characterized on hardware.
             if explored_system
                 .secure_boot_status()
                 .is_ok_and(|s| s.is_enabled)
@@ -1031,6 +1030,28 @@ fn machine_setup_status<B: Bmc>(
                     actual: "true".to_string(),
                 })
             }
+            if let Some(mac) = boot_interface_mac {
+                let actual = explored_system.boot_order_first_option();
+                let mac_str = format!("/MAC({},", mac.to_string().replace(":", ""));
+                let expected = explored_system.boot_options.iter().find(|option| {
+                    option.uefi_device_path().is_some_and(|path| {
+                        path.inner().contains(&mac_str)
+                            && path.inner().contains("/IPv4(")
+                            && path.inner().ends_with("/Uri()")
+                    })
+                });
+                if let Some(diff) = compare_boot_options(expected, actual) {
+                    diffs.push(diff)
+                }
+            }
+        }
+
+        hw::HwType::SupermicroGb300 => {
+            diffs.extend(
+                hw::supermicro_gb300::EXPECTED_BIOS_ATTRS
+                    .iter()
+                    .flat_map(|expected| explored_system.verify_bios_attr(expected)),
+            );
             if let Some(mac) = boot_interface_mac {
                 let actual = explored_system.boot_order_first_option();
                 let mac_str = format!("/MAC({},", mac.to_string().replace(":", ""));

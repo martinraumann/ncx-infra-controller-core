@@ -189,7 +189,9 @@ impl SupermicroGB300Nvl<'_> {
                     model: Some("GB NVL".into()),
                     oem: redfish::computer_system::Oem::Generic,
                     callbacks: Some(callbacks),
-                    secure_boot_available: true,
+                    // This firmware exposes the SecureBoot resource but omits
+                    // SecureBootEnable, so there is no usable status to report.
+                    secure_boot_available: false,
                     serial_number: Some(self.system_0_serial_number.to_string().into()),
                     storage: None,
                     processors: None,
@@ -276,9 +278,13 @@ impl SupermicroGB300Nvl<'_> {
 }
 
 fn base_bios(system_id: &str) -> serde_json::Value {
-    // TODO(smc): the SMC GB300 tray BIOS has not been characterized yet, so no
-    // platform-specific attributes are asserted here.
+    // Security device support is already enabled; the DPU-facing option ROMs
+    // still need to be enabled by clearing their DisableOptionROM controls.
     redfish::bios::builder(&redfish::bios::resource(system_id))
-        .attributes(json!({}))
+        .attributes(json!({
+            "SecurityDeviceSupport": "Enabled",
+            "Socket0Pcie6DisableOptionROM": true,
+            "Socket1Pcie6DisableOptionROM": true,
+        }))
         .build()
 }
