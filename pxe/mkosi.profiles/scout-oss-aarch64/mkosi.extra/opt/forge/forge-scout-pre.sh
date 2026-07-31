@@ -65,3 +65,4 @@ udevadm settle
 chown nvidia-dcgm:nvidia-dcgm /var/log/nvidia-dcgm
 /opt/forge/load_modules.sh || true
 udevadm settle
+/opt/forge/forge-scout-network.sh || echo "Scout NIC filtering failed; continuing startup" >&2
