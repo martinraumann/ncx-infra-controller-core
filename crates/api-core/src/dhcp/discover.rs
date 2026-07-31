@@ -229,7 +229,7 @@ pub async fn discover_dhcp(
                     machine_interface::move_predicted_machine_interface_to_machine(
                         &mut txn,
                         &expected_interface,
-                        relay_ip,
+                        parsed_relay,
                         api.runtime_config.retained_boot_interface_window,
                     )
                     .await?;

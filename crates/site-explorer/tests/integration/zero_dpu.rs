@@ -272,6 +272,76 @@ async fn test_predicted_interface_hands_boot_interface_id_to_real_row(
     Ok(())
 }
 
+#[sqlx_test]
+async fn test_predicted_host_nic_dhcp_uses_link_address_for_promotion(
+    pool: PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let env = init(pool).await;
+    let mock_host = zero_dpu_host();
+    let inband_mac = *mock_host.non_dpu_macs.first().unwrap();
+    register_zero_dpu_expected_machine(&env, &mock_host).await?;
+
+    let host_bmc_response = env
+        .api()
+        .discover_dhcp(
+            rpc::forge::DhcpDiscovery::builder(
+                mock_host.bmc_mac_address,
+                env.underlay_segment.relay_address,
+            )
+            .vendor_string("SomeVendor")
+            .tonic_request(),
+        )
+        .await?
+        .into_inner();
+    let host_bmc_ip = host_bmc_response.address.parse()?;
+
+    env.site_explorer.insert_endpoints(
+        mock_host
+            .exploration_results(Some(host_bmc_ip), &[])?
+            .into_endpoints(),
+    );
+    env.site_explorer.run_single_iteration().await?;
+    let mut txn = env.pool.begin().await?;
+    db::explored_endpoints::set_preingestion_complete(host_bmc_ip, &mut txn).await?;
+    txn.commit().await?;
+    env.site_explorer.run_single_iteration().await?;
+
+    let mut txn = env.pool.begin().await?;
+    db::predicted_machine_interface::find_by_mac_address(&mut txn, inband_mac)
+        .await?
+        .expect("zero-DPU ingest should have minted a predicted interface");
+    txn.rollback().await?;
+
+    let host_dhcp_response = env
+        .api()
+        .discover_dhcp(
+            rpc::forge::DhcpDiscovery::builder(inband_mac, "203.0.113.32")
+                .link_address(env.host_inband_segment.relay_address.to_string())
+                .vendor_string("Bluefield")
+                .tonic_request(),
+        )
+        .await?
+        .into_inner();
+    assert!(host_dhcp_response.machine_id.is_some());
+
+    let mut txn = env.pool.begin().await?;
+    let interfaces = db::machine_interface::find_by_mac_address(txn.as_mut(), inband_mac).await?;
+    assert_eq!(interfaces.len(), 1);
+    assert_eq!(
+        interfaces[0].segment_id, env.host_inband_segment.segment.id,
+        "prediction promotion should use DHCP link_address, not relay packet source"
+    );
+    assert!(
+        db::predicted_machine_interface::find_by_mac_address(&mut txn, inband_mac)
+            .await?
+            .is_none(),
+        "the prediction should be consumed by promotion"
+    );
+    txn.rollback().await?;
+
+    Ok(())
+}
+
 /// When a retained boot interface id AND a prediction with a live-report
 /// id both exist for a MAC, DHCP promotion lands the LIVE id on the
 /// promoted row -- the prediction is refreshed every exploration cycle,
