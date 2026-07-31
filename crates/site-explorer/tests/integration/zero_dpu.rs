@@ -328,7 +328,7 @@ async fn test_predicted_host_nic_dhcp_uses_link_address_for_promotion(
     let interfaces = db::machine_interface::find_by_mac_address(txn.as_mut(), inband_mac).await?;
     assert_eq!(interfaces.len(), 1);
     assert_eq!(
-        interfaces[0].segment_id, env.host_inband_segment.segment.id,
+        interfaces[0].segment_id, env.host_inband_segment.id,
         "prediction promotion should use DHCP link_address, not relay packet source"
     );
     assert!(
